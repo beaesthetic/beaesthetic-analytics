@@ -9,6 +9,7 @@ dependencies = [
     "uvicorn[standard]>=0.32.0",
     "motor>=3.6.0",
     "polars>=1.17.0",
+    "pymongoarrow>=1.5.0",
     "pydantic>=2.10.0",
     "pydantic-settings>=2.6.0",
 ]
