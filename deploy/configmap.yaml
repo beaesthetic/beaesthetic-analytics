@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: beaesthetic-analytics-config
+  namespace: beaesthetic
+data:
+  ANALYTICS_MONGODB_DATABASE: "appointments-v2"

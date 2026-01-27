@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: beaesthetic-analytics
+  namespace: beaesthetic
+  labels:
+    app: beaesthetic-analytics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: beaesthetic-analytics
+  template:
+    metadata:
+      labels:
+        app: beaesthetic-analytics
+    spec:
+      containers:
+      - name: beaesthetic-analytics
+        image: petretiandrea/beaesthetic-analytics:latest
+        ports:
+        - containerPort: 8000
+        envFrom:
+        - configMapRef:
+            name: beaesthetic-analytics-config
+        - secretRef:
+            name: beaesthetic-analytics-secrets
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "256Mi"
+            cpu: "250m"
+      restartPolicy: Always
