@@ -4,6 +4,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from functools import partial
+import string
 
 import polars as pl
 import pyarrow as pa
@@ -16,13 +17,15 @@ from analytics.config import settings
 _executor = ThreadPoolExecutor(max_workers=4)
 
 # Arrow schema for appointments - defines columns to extract
-APPOINTMENT_SCHEMA = pa.schema([
-    ("_id", pa.string()),
-    ("start", pa.timestamp("ms")),
-    ("end", pa.timestamp("ms")),
-    ("isCancelled", pa.bool_()),
-    ("createdAt", pa.timestamp("ms")),
-])
+# schema = Schema({"_id": int, "amount": float, "last_updated": datetime})
+# APPOINTMENT_SCHEMA = pa.Schema({
+#     "_id": string,
+#     "start": datetime,
+#     "end": datetime,
+#     "isCancelled": bool,
+#     "createdAt": datetime,
+#     "data.type": string,
+# })
 
 
 class AgendaRepository:
@@ -47,8 +50,7 @@ class AgendaRepository:
         }
         return find_arrow_all(
             self._collection,
-            query,
-            schema=APPOINTMENT_SCHEMA,
+            query
         )
 
     async def find_as_polars(

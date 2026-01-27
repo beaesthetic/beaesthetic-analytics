@@ -7,7 +7,7 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, Query
 from pymongo import MongoClient
 
-from analytics.models import MoMComparison, YoYComparison
+from analytics.models import Granularity, Metric, MoMComparison, TimeSeriesResponse, YoYComparison
 from analytics.repositories.agenda import AgendaRepository, get_mongo_client
 from analytics.services.analytics import AnalyticsService
 
@@ -53,43 +53,17 @@ async def health_check() -> dict[str, str]:
     return {"status": "healthy"}
 
 
-@app.get("/analytics/daily")
-async def get_daily_breakdown(
+@app.get("/analytics/timeseries", response_model=TimeSeriesResponse)
+async def get_timeseries(
+    granularity: Annotated[Granularity, Query(description="Time granularity (DAY, WEEK, MONTH, YEAR)")],
+    metrics: Annotated[list[Metric], Query(description="Metrics to retrieve")],
     start_date: Annotated[datetime, Query(description="Start date (inclusive)")],
     end_date: Annotated[datetime, Query(description="End date (exclusive)")],
     service: Annotated[AnalyticsService, Depends(get_analytics_service)],
-) -> list[dict]:
-    """Get daily breakdown of appointments (Polars LazyFrame aggregation)."""
-    return await service.get_daily_breakdown(start_date, end_date)
-
-
-@app.get("/analytics/monthly-trend")
-async def get_monthly_trend(
-    year: Annotated[int, Query(description="Year for the trend", ge=2000, le=2100)],
-    service: Annotated[AnalyticsService, Depends(get_analytics_service)],
-) -> list[dict]:
-    """Get monthly trend for a full year (Polars LazyFrame aggregation)."""
-    return await service.get_monthly_trend(year)
-
-
-@app.get("/analytics/weekday-distribution")
-async def get_weekday_distribution(
-    start_date: Annotated[datetime, Query(description="Start date (inclusive)")],
-    end_date: Annotated[datetime, Query(description="End date (exclusive)")],
-    service: Annotated[AnalyticsService, Depends(get_analytics_service)],
-) -> list[dict]:
-    """Get appointment distribution by weekday (Polars LazyFrame aggregation)."""
-    return await service.get_weekday_distribution(start_date, end_date)
-
-
-@app.get("/analytics/hourly-distribution")
-async def get_hourly_distribution(
-    start_date: Annotated[datetime, Query(description="Start date (inclusive)")],
-    end_date: Annotated[datetime, Query(description="End date (exclusive)")],
-    service: Annotated[AnalyticsService, Depends(get_analytics_service)],
-) -> list[dict]:
-    """Get appointment distribution by hour (Polars LazyFrame aggregation)."""
-    return await service.get_hourly_distribution(start_date, end_date)
+    timezone: Annotated[str, Query(description="Timezone for aggregation")] = "UTC",
+) -> TimeSeriesResponse:
+    """Get time series analytics with configurable granularity and metrics."""
+    return await service.get_timeseries(granularity, metrics, start_date, end_date, timezone)
 
 
 @app.get("/analytics/mom", response_model=MoMComparison)

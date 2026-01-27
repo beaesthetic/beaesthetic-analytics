@@ -4,8 +4,30 @@ from datetime import datetime
 
 import polars as pl
 
-from analytics.models import AppointmentSummary, MoMComparison, YoYComparison
+from analytics.models import (
+    AppointmentSummary,
+    Granularity,
+    Metric,
+    MoMComparison,
+    SeriesPoint,
+    TimeSeriesResponse,
+    YoYComparison,
+)
 from analytics.repositories.agenda import AgendaRepository
+
+# Mapping from metric enum to Polars column/expression
+METRIC_EXPRESSIONS = {
+    Metric.APPOINTMENTS_COUNT: pl.len().alias("appointments.count"),
+    Metric.APPOINTMENTS_CANCELLED: pl.col("isCancelled").sum().alias("appointments.cancelled"),
+    Metric.APPOINTMENTS_COMPLETED: (pl.len() - pl.col("isCancelled").sum()).alias("appointments.completed"),
+    Metric.APPOINTMENTS_CANCELLATION_RATE: (
+        pl.when(pl.len() > 0)
+        .then(pl.col("isCancelled").sum() / pl.len() * 100)
+        .otherwise(0.0)
+        .round(2)
+        .alias("appointments.cancellation_rate")
+    ),
+}
 
 
 class AnalyticsService:
@@ -171,116 +193,74 @@ class AnalyticsService:
             cancellation_rate_change=changes["rate_change"],
         )
 
-    async def get_daily_breakdown(
+    async def get_timeseries(
         self,
+        granularity: Granularity,
+        metrics: list[Metric],
         start_date: datetime,
         end_date: datetime,
-    ) -> list[dict]:
-        """Get daily breakdown using Polars lazy aggregations."""
+        timezone: str,
+    ) -> TimeSeriesResponse:
+        """Get time series analytics by granularity and metrics."""
         lf = await self._load_lazy(start_date, end_date)
 
-        return (
-            lf.with_columns(pl.col("createdAt").dt.date().alias("date"))
-            .group_by("date")
-            .agg(
-                pl.len().alias("total"),
-                pl.col("isCancelled").sum().alias("cancelled"),
-            )
-            .with_columns(
-                (pl.col("total") - pl.col("cancelled")).alias("completed"),
-                pl.when(pl.col("total") > 0)
-                .then(pl.col("cancelled") / pl.col("total") * 100)
-                .otherwise(0.0)
-                .round(2)
-                .alias("cancellation_rate"),
-            )
-            .sort("date")
+        # Convert to timezone and extract period based on granularity
+        match granularity:
+            case Granularity.DAY:
+                lf = lf.with_columns(
+                    pl.col("createdAt")
+                    .dt.convert_time_zone(timezone)
+                    .dt.strftime("%Y-%m-%d")
+                    .alias("period")
+                )
+            case Granularity.WEEK:
+                lf = lf.with_columns(
+                    pl.col("createdAt")
+                    .dt.convert_time_zone(timezone)
+                    .dt.strftime("%G-W%V")
+                    .alias("period")
+                )
+            case Granularity.MONTH:
+                lf = lf.with_columns(
+                    pl.col("createdAt")
+                    .dt.convert_time_zone(timezone)
+                    .dt.strftime("%Y-%m")
+                    .alias("period")
+                )
+            case Granularity.YEAR:
+                lf = lf.with_columns(
+                    pl.col("createdAt")
+                    .dt.convert_time_zone(timezone)
+                    .dt.strftime("%Y")
+                    .alias("period")
+                )
+
+        # Build aggregation expressions for requested metrics
+        agg_expressions = [METRIC_EXPRESSIONS[m] for m in metrics]
+
+        # Aggregate by period with requested metrics
+        result = (
+            lf.group_by("period")
+            .agg(*agg_expressions)
+            .sort("period")
             .collect()
-            .to_dicts()
         )
 
-    async def get_monthly_trend(self, year: int) -> list[dict]:
-        """Get monthly trend for a year using Polars lazy execution."""
-        lf = await self._load_lazy(datetime(year, 1, 1), datetime(year + 1, 1, 1))
-
-        return (
-            lf.with_columns(pl.col("createdAt").dt.month().alias("month"))
-            .group_by("month")
-            .agg(
-                pl.len().alias("total"),
-                pl.col("isCancelled").sum().alias("cancelled"),
+        # Build series with values dict
+        metric_names = [m.value for m in metrics]
+        series = [
+            SeriesPoint(
+                period=row["period"],
+                values={name: row[name] for name in metric_names},
             )
-            .with_columns(
-                (pl.col("total") - pl.col("cancelled")).alias("completed"),
-                pl.when(pl.col("total") > 0)
-                .then(pl.col("cancelled") / pl.col("total") * 100)
-                .otherwise(0.0)
-                .round(2)
-                .alias("cancellation_rate"),
-            )
-            .sort("month")
-            .collect()
-            .to_dicts()
-        )
+            for row in result.to_dicts()
+        ]
 
-    async def get_weekday_distribution(
-        self,
-        start_date: datetime,
-        end_date: datetime,
-    ) -> list[dict]:
-        """Get weekday distribution using Polars lazy execution."""
-        lf = await self._load_lazy(start_date, end_date)
-
-        weekday_names = {
-            1: "Monday",
-            2: "Tuesday",
-            3: "Wednesday",
-            4: "Thursday",
-            5: "Friday",
-            6: "Saturday",
-            7: "Sunday",
-        }
-
-        return (
-            lf.with_columns(pl.col("createdAt").dt.weekday().alias("weekday"))
-            .group_by("weekday")
-            .agg(
-                pl.len().alias("total"),
-                pl.col("isCancelled").sum().alias("cancelled"),
-            )
-            .with_columns(
-                (pl.col("total") - pl.col("cancelled")).alias("completed"),
-                pl.when(pl.col("total") > 0)
-                .then(pl.col("cancelled") / pl.col("total") * 100)
-                .otherwise(0.0)
-                .round(2)
-                .alias("cancellation_rate"),
-                pl.col("weekday")
-                .replace_strict(weekday_names, default="Unknown")
-                .alias("weekday_name"),
-            )
-            .sort("weekday")
-            .collect()
-            .to_dicts()
-        )
-
-    async def get_hourly_distribution(
-        self,
-        start_date: datetime,
-        end_date: datetime,
-    ) -> list[dict]:
-        """Get hourly distribution using Polars lazy execution."""
-        lf = await self._load_lazy(start_date, end_date)
-
-        return (
-            lf.with_columns(pl.col("start").dt.hour().alias("hour"))
-            .group_by("hour")
-            .agg(
-                pl.len().alias("total"),
-                pl.col("isCancelled").sum().alias("cancelled"),
-            )
-            .with_columns((pl.col("total") - pl.col("cancelled")).alias("completed"))
-            .sort("hour")
-            .collect()
-            .to_dicts()
+        return TimeSeriesResponse(
+            granularity=granularity,
+            timezone=timezone,
+            metrics=metric_names,
+            start_date=start_date.strftime("%Y-%m-%d"),
+            end_date=end_date.strftime("%Y-%m-%d"),
+            series=series,
         )
