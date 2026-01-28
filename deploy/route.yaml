@@ -1,0 +1,30 @@
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: beaesthetic-analytics
+  namespace: beaesthetic
+spec:
+  ingressClassName: apisix
+  http:
+    - name: beaesthetic-analytics
+      plugin_config_name: oidc-firebase
+      match:
+        hosts: ["api.agenda.beaesthetic.it"]
+        paths: ["/analytics-service/*"]
+      backends:
+        - serviceName: beaesthetic-analytics
+          servicePort: 8000
+      plugins:
+        - name: proxy-rewrite
+          enable: true
+          config:
+            regex_uri: ["^/analytics-service/(.*)"]
+        - name: cors
+          enable: true
+          config:
+            allow_origins: "web.agenda.beaesthetic.it"
+            allow_credential: false
+            allow_methods: "*"
+            allow_headers: "*"
+            expose_headers: "*"
+            max_age: 5
