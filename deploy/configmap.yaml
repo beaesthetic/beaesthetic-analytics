@@ -5,3 +5,5 @@ metadata:
   namespace: beaesthetic
 data:
   ANALYTICS_MONGODB_DATABASE: "appointments-v2"
+  ANALYTICS_ENVIRONMENT: "production"
+  ANALYTICS_LOG_LEVEL: "INFO"

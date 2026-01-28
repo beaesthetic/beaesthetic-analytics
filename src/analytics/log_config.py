@@ -1,11 +1,32 @@
 """Logging configuration with loguru."""
 
+import logging
 import sys
 from functools import lru_cache
 
 from loguru import logger
 
 from analytics.config import Settings
+
+
+class InterceptHandler(logging.Handler):
+    """Handler that intercepts standard logging and redirects to loguru."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Emit a log record to loguru."""
+        # Get corresponding loguru level
+        try:
+            level = logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno
+
+        # Find caller from where the log originated
+        frame, depth = logging.currentframe(), 2
+        while frame and frame.f_code.co_filename == logging.__file__:
+            frame = frame.f_back
+            depth += 1
+
+        logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
 
 
 def json_formatter(record: dict) -> str:
@@ -61,6 +82,13 @@ def setup_logging() -> None:
             level=settings.log_level,
             colorize=True,
         )
+
+    # Intercept standard logging (uvicorn, fastapi, etc.)
+    logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
+
+    # Explicitly intercept uvicorn loggers
+    for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access", "fastapi"):
+        logging.getLogger(logger_name).handlers = [InterceptHandler()]
 
     logger.info("Logging configured", environment=settings.environment, level=settings.log_level)
 
