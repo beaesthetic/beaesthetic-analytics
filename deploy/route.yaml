@@ -18,7 +18,7 @@ spec:
         - name: proxy-rewrite
           enable: true
           config:
-            regex_uri: ["^/analytics-service/(.*)"]
+            regex_uri: ["^/analytics-service/(.*)", "$1"]
         - name: cors
           enable: true
           config:
