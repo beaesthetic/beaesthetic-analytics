@@ -15,14 +15,18 @@ from analytics.models import (
 )
 from analytics.repositories.agenda import AgendaRepository
 
+# Expression for customer cancellation (disdetta)
+_is_customer_cancel = (pl.col("isCancelled") == True) & (pl.col("cancelReason") == "CUSTOMER_CANCEL")
+_cancelled_count = pl.when(_is_customer_cancel).then(1).otherwise(0).sum()
+
 # Mapping from metric enum to Polars column/expression
 METRIC_EXPRESSIONS = {
     Metric.APPOINTMENTS_COUNT: pl.len().alias("appointments.count"),
-    Metric.APPOINTMENTS_CANCELLED: pl.col("isCancelled").sum().alias("appointments.cancelled"),
-    Metric.APPOINTMENTS_COMPLETED: (pl.len() - pl.col("isCancelled").sum()).alias("appointments.completed"),
+    Metric.APPOINTMENTS_CANCELLED: _cancelled_count.alias("appointments.cancelled"),
+    Metric.APPOINTMENTS_COMPLETED: (pl.len() - _cancelled_count).alias("appointments.completed"),
     Metric.APPOINTMENTS_CANCELLATION_RATE: (
         pl.when(pl.len() > 0)
-        .then(pl.col("isCancelled").sum() / pl.len() * 100)
+        .then(_cancelled_count / pl.len() * 100)
         .otherwise(0.0)
         .round(2)
         .alias("appointments.cancellation_rate")
