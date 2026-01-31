@@ -5,7 +5,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from analytics.models import Granularity, Metric, MoMComparison, TimeSeriesResponse, YoYComparison
+from analytics.models import Granularity, Metric, SummaryResponse, TimeSeriesResponse
 from analytics.services.analytics import AnalyticsService
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
@@ -29,21 +29,12 @@ async def get_timeseries(
     return await service.get_timeseries(granularity, metrics, start_date, end_date, timezone)
 
 
-@router.get("/mom", response_model=MoMComparison)
-async def get_mom_comparison(
-    year: Annotated[int, Query(description="Year for the comparison", ge=2000, le=2100)],
-    month: Annotated[int, Query(description="Month for the comparison", ge=1, le=12)],
+@router.get("/summary", response_model=SummaryResponse)
+async def get_summary(
+    metric: Annotated[Metric, Query(description="Metric to summarize")],
+    start_date: Annotated[datetime, Query(description="Start date (inclusive)")],
+    end_date: Annotated[datetime, Query(description="End date (exclusive)")],
     service: Annotated[AnalyticsService, Depends(get_analytics_service)],
-) -> MoMComparison:
-    """Get Month over Month comparison."""
-    return await service.compute_mom(year, month)
-
-
-@router.get("/yoy", response_model=YoYComparison)
-async def get_yoy_comparison(
-    year: Annotated[int, Query(description="Year for the comparison", ge=2000, le=2100)],
-    service: Annotated[AnalyticsService, Depends(get_analytics_service)],
-    month: Annotated[int | None, Query(description="Optional month for monthly YoY", ge=1, le=12)] = None,
-) -> YoYComparison:
-    """Get Year over Year comparison."""
-    return await service.compute_yoy(year, month)
+) -> SummaryResponse:
+    """Get metric summary with MoM and YoY comparisons."""
+    return await service.get_summary(metric, start_date, end_date)

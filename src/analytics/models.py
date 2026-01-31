@@ -41,31 +41,25 @@ class TimeSeriesResponse(BaseModel):
     series: list[SeriesPoint]
 
 
-class AppointmentSummary(BaseModel):
-    """Summary of appointments for a period."""
+class PeriodComparison(BaseModel):
+    """Comparison against a previous period."""
 
-    period: str
-    total_count: int
-    cancelled_count: int
-    completed_count: int
-    cancellation_rate: float
+    previous_value: int | float
+    change_percent: float | None
 
 
-class MoMComparison(BaseModel):
-    """Month over Month comparison."""
+class PeriodRange(BaseModel):
+    """A date range."""
 
-    current_month: AppointmentSummary
-    previous_month: AppointmentSummary
-    count_change: int
-    count_change_percent: float
-    cancellation_rate_change: float
+    start: str
+    end: str
 
 
-class YoYComparison(BaseModel):
-    """Year over Year comparison."""
+class SummaryResponse(BaseModel):
+    """Response for summary/KPI endpoint."""
 
-    current_year: AppointmentSummary
-    previous_year: AppointmentSummary
-    count_change: int
-    count_change_percent: float
-    cancellation_rate_change: float
+    metric: str
+    period: PeriodRange
+    value: int | float
+    mom: PeriodComparison | None
+    yoy: PeriodComparison | None

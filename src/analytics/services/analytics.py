@@ -1,37 +1,63 @@
-"""Analytics service with MoM and YoY calculations using Polars LazyFrames."""
+"""Analytics service for time series and summary metrics."""
 
 from datetime import datetime
 
 import polars as pl
+from dateutil.relativedelta import relativedelta
 
 from analytics.models import (
-    AppointmentSummary,
     Granularity,
     Metric,
-    MoMComparison,
+    PeriodComparison,
+    PeriodRange,
     SeriesPoint,
+    SummaryResponse,
     TimeSeriesResponse,
-    YoYComparison,
 )
 from analytics.repositories.agenda import AgendaRepository
 
 # Expression for customer cancellation (disdetta)
 _is_customer_cancel = (pl.col("isCancelled") == True) & (pl.col("cancelReason") == "CUSTOMER_CANCEL")
-_cancelled_count = pl.when(_is_customer_cancel).then(1).otherwise(0).sum()
 
-# Mapping from metric enum to Polars column/expression
-METRIC_EXPRESSIONS = {
-    Metric.APPOINTMENTS_COUNT: pl.len().alias("appointments.count"),
-    Metric.APPOINTMENTS_CANCELLED: _cancelled_count.alias("appointments.cancelled"),
-    Metric.APPOINTMENTS_COMPLETED: (pl.len() - _cancelled_count).alias("appointments.completed"),
-    Metric.APPOINTMENTS_CANCELLATION_RATE: (
-        pl.when(pl.len() > 0)
-        .then(_cancelled_count / pl.len() * 100)
-        .otherwise(0.0)
-        .round(2)
-        .alias("appointments.cancellation_rate")
-    ),
+# Atomic expressions (computed in .agg())
+ATOMIC_EXPRESSIONS = {
+    "_total": pl.len().alias("_total"),
+    "_cancelled": pl.when(_is_customer_cancel).then(1).otherwise(0).sum().alias("_cancelled"),
 }
+
+# Metric configuration: dependencies and how to compute/rename
+METRIC_CONFIG = {
+    Metric.APPOINTMENTS_COUNT: {
+        "requires": ["_total"],
+        "expr": pl.col("_total").alias("appointments.count"),
+    },
+    Metric.APPOINTMENTS_CANCELLED: {
+        "requires": ["_cancelled"],
+        "expr": pl.col("_cancelled").alias("appointments.cancelled"),
+    },
+    Metric.APPOINTMENTS_COMPLETED: {
+        "requires": ["_total", "_cancelled"],
+        "expr": (pl.col("_total") - pl.col("_cancelled")).alias("appointments.completed"),
+    },
+    Metric.APPOINTMENTS_CANCELLATION_RATE: {
+        "requires": ["_total", "_cancelled"],
+        "expr": (
+            pl.when(pl.col("_total") > 0)
+            .then(pl.col("_cancelled") / pl.col("_total") * 100)
+            .otherwise(0.0)
+            .round(2)
+            .alias("appointments.cancellation_rate")
+        ),
+    },
+}
+
+
+def _resolve_dependencies(metrics: list[Metric]) -> set[str]:
+    """Resolve which atomic columns are needed for the requested metrics."""
+    required = set()
+    for metric in metrics:
+        required.update(METRIC_CONFIG[metric]["requires"])
+    return required
 
 
 class AnalyticsService:
@@ -48,153 +74,75 @@ class AnalyticsService:
         """Load appointments as LazyFrame for deferred execution."""
         return await self._repository.find_as_lazy(start_date, end_date)
 
-    def _summarize(self, lf: pl.LazyFrame, period: str) -> AppointmentSummary:
-        """Compute summary statistics from LazyFrame."""
-        stats = (
-            lf.select(
-                pl.len().alias("total"),
-                pl.col("isCancelled").sum().alias("cancelled"),
-            )
+    async def _compute_metric(
+        self,
+        metric: Metric,
+        start_date: datetime,
+        end_date: datetime,
+    ) -> int | float:
+        """Compute a single metric value for a date range."""
+        lf = await self._load_lazy(start_date, end_date)
+
+        # Resolve and compute atomic dependencies
+        config = METRIC_CONFIG[metric]
+        required = config["requires"]
+        agg_exprs = [ATOMIC_EXPRESSIONS[name] for name in required]
+
+        result = (
+            lf.select(*agg_exprs)
+            .with_columns(config["expr"])
+            .select(metric.value)
             .collect()
         )
 
-        if stats.is_empty() or stats["total"][0] == 0:
-            return AppointmentSummary(
-                period=period,
-                total_count=0,
-                cancelled_count=0,
-                completed_count=0,
-                cancellation_rate=0.0,
-            )
+        if result.is_empty():
+            return 0
 
-        total = stats["total"][0]
-        cancelled = stats["cancelled"][0]
+        return result[metric.value][0]
 
-        return AppointmentSummary(
-            period=period,
-            total_count=total,
-            cancelled_count=cancelled,
-            completed_count=total - cancelled,
-            cancellation_rate=round((cancelled / total * 100) if total > 0 else 0.0, 2),
-        )
+    @staticmethod
+    def _change_percent(current: int | float, previous: int | float) -> float | None:
+        """Calculate percentage change, None if no previous data."""
+        if previous == 0:
+            return None
+        return round((current - previous) / previous * 100, 2)
 
-    async def compute_mom(self, year: int, month: int) -> MoMComparison:
-        """Compute Month over Month comparison using Polars LazyFrames."""
-        # Date boundaries
-        current_start = datetime(year, month, 1)
-        if month == 12:
-            current_end = datetime(year + 1, 1, 1)
-            prev_start = datetime(year, 11, 1)
-        else:
-            current_end = datetime(year, month + 1, 1)
-            prev_start = datetime(year - 1, 12, 1) if month == 1 else datetime(year, month - 1, 1)
+    async def get_summary(
+        self,
+        metric: Metric,
+        start_date: datetime,
+        end_date: datetime,
+    ) -> SummaryResponse:
+        """Get metric summary with MoM and YoY comparisons."""
+        # Current value
+        current_value = await self._compute_metric(metric, start_date, end_date)
 
-        # Load all data in one query, filter lazily
-        lf = await self._load_lazy(prev_start, current_end)
+        # MoM: shift range back by same duration
+        duration = end_date - start_date
+        mom_start = start_date - duration
+        mom_end = end_date - duration
+        mom_value = await self._compute_metric(metric, mom_start, mom_end)
 
-        # Lazy filtering
-        lf = lf.with_columns(
-            pl.col("createdAt").dt.year().alias("_year"),
-            pl.col("createdAt").dt.month().alias("_month"),
-        )
+        # YoY: shift range back by 1 year
+        yoy_start = start_date - relativedelta(years=1)
+        yoy_end = end_date - relativedelta(years=1)
+        yoy_value = await self._compute_metric(metric, yoy_start, yoy_end)
 
-        current_lf = lf.filter(
-            (pl.col("_year") == year) & (pl.col("_month") == month)
-        )
-
-        prev_month = 12 if month == 1 else month - 1
-        prev_year = year - 1 if month == 1 else year
-        prev_lf = lf.filter(
-            (pl.col("_year") == prev_year) & (pl.col("_month") == prev_month)
-        )
-
-        # Summaries
-        current_period = f"{year}-{month:02d}"
-        prev_period = f"{prev_year}-{prev_month:02d}"
-
-        current_summary = self._summarize(current_lf, current_period)
-        prev_summary = self._summarize(prev_lf, prev_period)
-
-        # Calculate changes with Polars
-        changes = (
-            pl.LazyFrame({
-                "curr": [current_summary.total_count],
-                "prev": [prev_summary.total_count],
-                "curr_rate": [current_summary.cancellation_rate],
-                "prev_rate": [prev_summary.cancellation_rate],
-            })
-            .select(
-                (pl.col("curr") - pl.col("prev")).alias("count_change"),
-                pl.when(pl.col("prev") > 0)
-                .then((pl.col("curr") - pl.col("prev")) / pl.col("prev") * 100)
-                .otherwise(0.0)
-                .round(2)
-                .alias("count_pct"),
-                (pl.col("curr_rate") - pl.col("prev_rate")).round(2).alias("rate_change"),
-            )
-            .collect()
-            .row(0, named=True)
-        )
-
-        return MoMComparison(
-            current_month=current_summary,
-            previous_month=prev_summary,
-            count_change=changes["count_change"],
-            count_change_percent=changes["count_pct"],
-            cancellation_rate_change=changes["rate_change"],
-        )
-
-    async def compute_yoy(self, year: int, month: int | None = None) -> YoYComparison:
-        """Compute Year over Year comparison using Polars LazyFrames."""
-        if month:
-            current_start = datetime(year, month, 1)
-            current_end = datetime(year + 1, 1, 1) if month == 12 else datetime(year, month + 1, 1)
-            prev_start = datetime(year - 1, month, 1)
-            prev_end = datetime(year, 1, 1) if month == 12 else datetime(year - 1, month + 1, 1)
-            current_period = f"{year}-{month:02d}"
-            prev_period = f"{year - 1}-{month:02d}"
-        else:
-            current_start = datetime(year, 1, 1)
-            current_end = datetime(year + 1, 1, 1)
-            prev_start = datetime(year - 1, 1, 1)
-            prev_end = datetime(year, 1, 1)
-            current_period = str(year)
-            prev_period = str(year - 1)
-
-        # Load both periods as LazyFrames
-        current_lf = await self._load_lazy(current_start, current_end)
-        prev_lf = await self._load_lazy(prev_start, prev_end)
-
-        current_summary = self._summarize(current_lf, current_period)
-        prev_summary = self._summarize(prev_lf, prev_period)
-
-        # Calculate changes
-        changes = (
-            pl.LazyFrame({
-                "curr": [current_summary.total_count],
-                "prev": [prev_summary.total_count],
-                "curr_rate": [current_summary.cancellation_rate],
-                "prev_rate": [prev_summary.cancellation_rate],
-            })
-            .select(
-                (pl.col("curr") - pl.col("prev")).alias("count_change"),
-                pl.when(pl.col("prev") > 0)
-                .then((pl.col("curr") - pl.col("prev")) / pl.col("prev") * 100)
-                .otherwise(0.0)
-                .round(2)
-                .alias("count_pct"),
-                (pl.col("curr_rate") - pl.col("prev_rate")).round(2).alias("rate_change"),
-            )
-            .collect()
-            .row(0, named=True)
-        )
-
-        return YoYComparison(
-            current_year=current_summary,
-            previous_year=prev_summary,
-            count_change=changes["count_change"],
-            count_change_percent=changes["count_pct"],
-            cancellation_rate_change=changes["rate_change"],
+        return SummaryResponse(
+            metric=metric.value,
+            period=PeriodRange(
+                start=start_date.strftime("%Y-%m-%d"),
+                end=end_date.strftime("%Y-%m-%d"),
+            ),
+            value=current_value,
+            mom=PeriodComparison(
+                previous_value=mom_value,
+                change_percent=self._change_percent(current_value, mom_value),
+            ),
+            yoy=PeriodComparison(
+                previous_value=yoy_value,
+                change_percent=self._change_percent(current_value, yoy_value),
+            ),
         )
 
     async def get_timeseries(
@@ -239,16 +187,20 @@ class AnalyticsService:
                     .alias("period")
                 )
 
-        # Build aggregation expressions for requested metrics
-        agg_expressions = [METRIC_EXPRESSIONS[m] for m in metrics]
+        # Resolve dependencies: which atomic columns do we need?
+        required_atomics = _resolve_dependencies(metrics)
+        agg_expressions = [ATOMIC_EXPRESSIONS[name] for name in required_atomics]
 
-        # Aggregate by period with requested metrics
-        result = (
-            lf.group_by("period")
-            .agg(*agg_expressions)
-            .sort("period")
-            .collect()
-        )
+        # Step 1: Aggregate atomic metrics
+        result = lf.group_by("period").agg(*agg_expressions)
+
+        # Step 2: Derive requested metrics from atomics
+        derived_expressions = [METRIC_CONFIG[m]["expr"] for m in metrics]
+        result = result.with_columns(*derived_expressions)
+
+        # Step 3: Select only period + requested metric columns
+        metric_names = [m.value for m in metrics]
+        result = result.select(["period"] + metric_names).sort("period").collect()
 
         # Build series with values dict
         metric_names = [m.value for m in metrics]
