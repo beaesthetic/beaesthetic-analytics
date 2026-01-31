@@ -23,7 +23,7 @@ class _CacheEntry:
 
 def _ttu(_key, entry: _CacheEntry, now):
     """Compute per-item TTU (time-to-use) based on whether the period is closed."""
-    if entry.end_date < datetime.now(timezone.utc):
+    if entry.end_date < datetime.now(tz=entry.end_date.tzinfo):
         return now + settings.cache_ttl_closed
     return now + settings.cache_ttl_open
 
