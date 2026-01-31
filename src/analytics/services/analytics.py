@@ -115,20 +115,20 @@ class AnalyticsService:
         start_date: datetime,
         end_date: datetime,
     ) -> SummaryResponse:
-        """Get metric summary with MoM and YoY comparisons."""
+        """Get metric summary with previous period and previous year comparisons."""
         # Current value
         current_value = await self._compute_metric(metric, start_date, end_date)
 
-        # MoM: shift range back by same duration
+        # Previous period: shift range back by same duration
         duration = end_date - start_date
-        mom_start = start_date - duration
-        mom_end = end_date - duration
-        mom_value = await self._compute_metric(metric, mom_start, mom_end)
+        prev_start = start_date - duration
+        prev_end = end_date - duration
+        prev_value = await self._compute_metric(metric, prev_start, prev_end)
 
-        # YoY: shift range back by 1 year
-        yoy_start = start_date - relativedelta(years=1)
-        yoy_end = end_date - relativedelta(years=1)
-        yoy_value = await self._compute_metric(metric, yoy_start, yoy_end)
+        # Previous year: shift range back by 1 year
+        prev_year_start = start_date - relativedelta(years=1)
+        prev_year_end = end_date - relativedelta(years=1)
+        prev_year_value = await self._compute_metric(metric, prev_year_start, prev_year_end)
 
         return SummaryResponse(
             metric=metric.value,
@@ -137,13 +137,13 @@ class AnalyticsService:
                 end=end_date.strftime("%Y-%m-%d"),
             ),
             value=current_value,
-            mom=PeriodComparison(
-                previous_value=mom_value,
-                change_percent=self._change_percent(current_value, mom_value),
+            previous_period=PeriodComparison(
+                previous_value=prev_value,
+                change_percent=self._change_percent(current_value, prev_value),
             ),
-            yoy=PeriodComparison(
-                previous_value=yoy_value,
-                change_percent=self._change_percent(current_value, yoy_value),
+            previous_year=PeriodComparison(
+                previous_value=prev_year_value,
+                change_percent=self._change_percent(current_value, prev_year_value),
             ),
         )
 

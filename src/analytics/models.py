@@ -61,5 +61,5 @@ class SummaryResponse(BaseModel):
     metric: str
     period: PeriodRange
     value: int | float
-    mom: PeriodComparison | None
-    yoy: PeriodComparison | None
+    previous_period: PeriodComparison | None
+    previous_year: PeriodComparison | None
