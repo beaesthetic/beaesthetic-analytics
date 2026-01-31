@@ -83,12 +83,8 @@ def setup_logging() -> None:
             colorize=True,
         )
 
-    # Intercept standard logging (uvicorn, fastapi, etc.)
+    # Intercept all standard logging via root logger (uvicorn, fastapi, etc.)
     logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
-
-    # Explicitly intercept uvicorn loggers
-    for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access", "fastapi"):
-        logging.getLogger(logger_name).handlers = [InterceptHandler()]
 
     logger.info("Logging configured", environment=settings.environment, level=settings.log_level)
 
