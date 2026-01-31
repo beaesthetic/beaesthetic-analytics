@@ -18,11 +18,11 @@ spec:
         - name: proxy-rewrite
           enable: true
           config:
-            regex_uri: ["^/analytics-service/(.*)", "/$1"]
+            regex_uri: ["^/analytics-service/(.*)", "$1"]
         - name: cors
           enable: true
           config:
-            allow_origins: "web.agenda.beaesthetic.it"
+            allow_origins: "*"
             allow_credential: false
             allow_methods: "*"
             allow_headers: "*"
