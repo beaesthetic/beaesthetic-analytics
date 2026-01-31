@@ -45,7 +45,7 @@ class AgendaRepository:
     ) -> pa.Table:
         """Synchronous Arrow query - runs in thread pool."""
         query = {
-            "createdAt": {"$gte": start_date, "$lt": end_date},
+            "start": {"$gte": start_date, "$lt": end_date},
             "data.type": "appointment",
         }
         return find_arrow_all(

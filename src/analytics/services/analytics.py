@@ -163,28 +163,28 @@ class AnalyticsService:
         match granularity:
             case Granularity.DAY:
                 lf = lf.with_columns(
-                    pl.col("createdAt")
+                    pl.col("start")
                     .dt.convert_time_zone(timezone)
                     .dt.strftime("%Y-%m-%d")
                     .alias("period")
                 )
             case Granularity.WEEK:
                 lf = lf.with_columns(
-                    pl.col("createdAt")
+                    pl.col("start")
                     .dt.convert_time_zone(timezone)
                     .dt.strftime("%G-W%V")
                     .alias("period")
                 )
             case Granularity.MONTH:
                 lf = lf.with_columns(
-                    pl.col("createdAt")
+                    pl.col("start")
                     .dt.convert_time_zone(timezone)
                     .dt.strftime("%Y-%m")
                     .alias("period")
                 )
             case Granularity.YEAR:
                 lf = lf.with_columns(
-                    pl.col("createdAt")
+                    pl.col("start")
                     .dt.convert_time_zone(timezone)
                     .dt.strftime("%Y")
                     .alias("period")
