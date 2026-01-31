@@ -5,6 +5,7 @@ from datetime import datetime
 import polars as pl
 from dateutil.relativedelta import relativedelta
 
+from analytics.cache import async_cached, cache
 from analytics.models import (
     Granularity,
     Metric,
@@ -107,6 +108,7 @@ class AnalyticsService:
             return None
         return round((current - previous) / previous * 100, 2)
 
+    @async_cached(cache)
     async def get_summary(
         self,
         metric: Metric,
@@ -145,10 +147,11 @@ class AnalyticsService:
             ),
         )
 
+    @async_cached(cache)
     async def get_timeseries(
         self,
         granularity: Granularity,
-        metrics: list[Metric],
+        metrics: tuple[Metric, ...],
         start_date: datetime,
         end_date: datetime,
         timezone: str,

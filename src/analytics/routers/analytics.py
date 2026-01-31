@@ -26,7 +26,7 @@ async def get_timeseries(
     timezone: Annotated[str, Query(description="Timezone for aggregation")] = "UTC",
 ) -> TimeSeriesResponse:
     """Get time series analytics with configurable granularity and metrics."""
-    return await service.get_timeseries(granularity, metrics, start_date, end_date, timezone)
+    return await service.get_timeseries(granularity, tuple(metrics), start_date, end_date, timezone)
 
 
 @router.get("/summary", response_model=SummaryResponse)

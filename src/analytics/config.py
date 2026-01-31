@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     environment: Literal["development", "production"] = "development"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
+    # Cache
+    cache_maxsize: int = 256
+    cache_ttl_closed: int = 86400  # TTL for closed periods (seconds)
+    cache_ttl_open: int = 120  # TTL for open/current periods (seconds)
+
     model_config = {"env_prefix": "ANALYTICS_"}
 
 
