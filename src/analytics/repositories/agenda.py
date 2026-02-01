@@ -6,7 +6,6 @@ from datetime import datetime
 from functools import partial
 
 import polars as pl
-import pyarrow as pa
 from pymongoarrow.api import find_arrow_all
 from pymongo import MongoClient
 
@@ -30,7 +29,7 @@ class AgendaRepository:
         self,
         start_date: datetime,
         end_date: datetime,
-    ) -> pa.Table:
+    ):
         """Synchronous Arrow query - runs in thread pool."""
         query = {
             "start": {"$gte": start_date, "$lt": end_date},
@@ -49,14 +48,24 @@ class AgendaRepository:
         """Find appointments and return as Polars DataFrame.
 
         Uses PyMongoArrow for efficient zero-copy conversion:
-        MongoDB cursor → Arrow Table → Polars DataFrame
+        MongoDB cursor → Arrow Table → Polars DataFrame.
+        Nested 'data' struct is flattened to 'data.type' and 'data.services'.
         """
         loop = asyncio.get_event_loop()
         arrow_table = await loop.run_in_executor(
             _executor,
             partial(self._find_arrow_sync, start_date, end_date),
         )
-        return pl.from_arrow(arrow_table)
+        df = pl.from_arrow(arrow_table)
+
+        # Flatten nested 'data' struct into dot-notation columns
+        if "data" in df.columns:
+            df = df.with_columns(
+                pl.col("data").struct.field("type").alias("data.type"),
+                pl.col("data").struct.field("services").alias("data.services"),
+            ).drop("data")
+
+        return df
 
     async def find_as_lazy(
         self,
