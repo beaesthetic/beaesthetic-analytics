@@ -65,6 +65,12 @@ class AgendaRepository:
                 pl.col("data").struct.field("services").alias("data.services"),
             ).drop("data")
 
+        # Flatten nested 'attendee' struct
+        if "attendee" in df.columns:
+            df = df.with_columns(
+                pl.col("attendee").struct.field("id").alias("attendee.id"),
+            ).drop("attendee")
+
         return df
 
     async def find_as_lazy(

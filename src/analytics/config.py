@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     cache_ttl_closed: int = 86400  # TTL for closed periods (seconds)
     cache_ttl_open: int = 120  # TTL for open/current periods (seconds)
 
+    # Insights
+    insight_inactive_months: int = 6  # window for inactive customers
+
     model_config = {"env_prefix": "ANALYTICS_"}
 
 

@@ -84,3 +84,23 @@ class ServiceBreakdownResponse(BaseModel):
     period: PeriodRange
     total_appointments: int
     services: list[ServiceBreakdownItem]
+
+
+class InactiveCustomerItem(BaseModel):
+    """Single inactive customer."""
+
+    id: str
+    name: str
+    surname: str
+    total_appointments: int
+    last_appointment: str | None  # YYYY-MM-DD, None if never came
+
+
+class InactiveCustomersResponse(BaseModel):
+    """Response for inactive customers insight."""
+
+    period: PeriodRange
+    threshold: int
+    total_customers: int
+    inactive_count: int
+    customers: list[InactiveCustomerItem]
