@@ -21,6 +21,8 @@ class Metric(str, Enum):
     APPOINTMENTS_COMPLETED = "appointments.completed"
     APPOINTMENTS_CANCELLED = "appointments.cancelled"
     APPOINTMENTS_CANCELLATION_RATE = "appointments.cancellation_rate"
+    SERVICES_UNIQUE_COUNT = "services.unique_count"
+    SERVICES_AVG_PER_APPOINTMENT = "services.avg_per_appointment"
 
 
 class SeriesPoint(BaseModel):
@@ -41,18 +43,19 @@ class TimeSeriesResponse(BaseModel):
     series: list[SeriesPoint]
 
 
-class PeriodComparison(BaseModel):
-    """Comparison against a previous period."""
-
-    previous_value: int | float
-    change_percent: float | None
-
-
 class PeriodRange(BaseModel):
     """A date range."""
 
     start: str
     end: str
+
+
+class PeriodComparison(BaseModel):
+    """Comparison against a previous period."""
+
+    period: PeriodRange
+    previous_value: int | float
+    change_percent: float | None
 
 
 class SummaryResponse(BaseModel):
@@ -63,3 +66,21 @@ class SummaryResponse(BaseModel):
     value: int | float
     previous_period: PeriodComparison | None
     previous_year: PeriodComparison | None
+
+
+class ServiceBreakdownItem(BaseModel):
+    """Single service in the breakdown."""
+
+    service: str
+    count: int
+    percentage: float
+    cancelled: int
+    cancellation_rate: float
+
+
+class ServiceBreakdownResponse(BaseModel):
+    """Response for service breakdown endpoint."""
+
+    period: PeriodRange
+    total_appointments: int
+    services: list[ServiceBreakdownItem]

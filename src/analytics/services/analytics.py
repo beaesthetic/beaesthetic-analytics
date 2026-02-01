@@ -6,59 +6,24 @@ import polars as pl
 from dateutil.relativedelta import relativedelta
 
 from analytics.cache import async_cached, cache
+from analytics.metrics import ATOMICS, METRIC_REGISTRY
 from analytics.models import (
     Granularity,
     Metric,
     PeriodComparison,
     PeriodRange,
     SeriesPoint,
+    ServiceBreakdownItem,
+    ServiceBreakdownResponse,
     SummaryResponse,
     TimeSeriesResponse,
 )
 from analytics.repositories.agenda import AgendaRepository
 
-# Expression for customer cancellation (disdetta)
-_is_customer_cancel = (pl.col("isCancelled") == True) & (pl.col("cancelReason") == "CUSTOMER_CANCEL")
-
-# Atomic expressions (computed in .agg())
-ATOMIC_EXPRESSIONS = {
-    "_total": pl.len().alias("_total"),
-    "_cancelled": pl.when(_is_customer_cancel).then(1).otherwise(0).sum().alias("_cancelled"),
-}
-
-# Metric configuration: dependencies and how to compute/rename
-METRIC_CONFIG = {
-    Metric.APPOINTMENTS_COUNT: {
-        "requires": ["_total"],
-        "expr": pl.col("_total").alias("appointments.count"),
-    },
-    Metric.APPOINTMENTS_CANCELLED: {
-        "requires": ["_cancelled"],
-        "expr": pl.col("_cancelled").alias("appointments.cancelled"),
-    },
-    Metric.APPOINTMENTS_COMPLETED: {
-        "requires": ["_total", "_cancelled"],
-        "expr": (pl.col("_total") - pl.col("_cancelled")).alias("appointments.completed"),
-    },
-    Metric.APPOINTMENTS_CANCELLATION_RATE: {
-        "requires": ["_total", "_cancelled"],
-        "expr": (
-            pl.when(pl.col("_total") > 0)
-            .then(pl.col("_cancelled") / pl.col("_total") * 100)
-            .otherwise(0.0)
-            .round(2)
-            .alias("appointments.cancellation_rate")
-        ),
-    },
-}
-
-
-def _resolve_dependencies(metrics: list[Metric]) -> set[str]:
-    """Resolve which atomic columns are needed for the requested metrics."""
-    required = set()
-    for metric in metrics:
-        required.update(METRIC_CONFIG[metric]["requires"])
-    return required
+# Expression for customer cancellation — used only in get_services_breakdown
+_is_customer_cancel = (
+    (pl.col("isCancelled") == True) & (pl.col("cancelReason") == "CUSTOMER_CANCEL")  # noqa: E712
+)
 
 
 class AnalyticsService:
@@ -83,15 +48,18 @@ class AnalyticsService:
     ) -> int | float:
         """Compute a single metric value for a date range."""
         lf = await self._load_lazy(start_date, end_date)
+        definition = METRIC_REGISTRY[metric]
 
-        # Resolve and compute atomic dependencies
-        config = METRIC_CONFIG[metric]
-        required = config["requires"]
-        agg_exprs = [ATOMIC_EXPRESSIONS[name] for name in required]
+        # Custom metrics with their own scalar computation
+        if definition.scalar_compute is not None:
+            return definition.scalar_compute(lf)
+
+        # Standard path: aggregate atomics then derive
+        agg_exprs = [ATOMICS[name] for name in definition.requires]
 
         result = (
             lf.select(*agg_exprs)
-            .with_columns(config["expr"])
+            .with_columns(definition.derive_expr)
             .select(metric.value)
             .collect()
         )
@@ -138,10 +106,18 @@ class AnalyticsService:
             ),
             value=current_value,
             previous_period=PeriodComparison(
+                period=PeriodRange(
+                    start=prev_start.strftime("%Y-%m-%d"),
+                    end=prev_end.strftime("%Y-%m-%d"),
+                ),
                 previous_value=prev_value,
                 change_percent=self._change_percent(current_value, prev_value),
             ),
             previous_year=PeriodComparison(
+                period=PeriodRange(
+                    start=prev_year_start.strftime("%Y-%m-%d"),
+                    end=prev_year_end.strftime("%Y-%m-%d"),
+                ),
                 previous_value=prev_year_value,
                 change_percent=self._change_percent(current_value, prev_year_value),
             ),
@@ -190,23 +166,35 @@ class AnalyticsService:
                     .alias("period")
                 )
 
-        # Resolve dependencies: which atomic columns do we need?
-        required_atomics = _resolve_dependencies(metrics)
-        agg_expressions = [ATOMIC_EXPRESSIONS[name] for name in required_atomics]
+        # Collect required atomics from all requested metrics
+        required_atomics: set[str] = set()
+        for metric in metrics:
+            required_atomics.update(METRIC_REGISTRY[metric].requires)
+        agg_expressions = [ATOMICS[name] for name in required_atomics]
 
-        # Step 1: Aggregate atomic metrics
+        # Add custom timeseries_agg expressions
+        for metric in metrics:
+            defn = METRIC_REGISTRY[metric]
+            if defn.timeseries_agg is not None:
+                agg_expressions.append(defn.timeseries_agg)
+
+        # Step 1: Aggregate
         result = lf.group_by("period").agg(*agg_expressions)
 
-        # Step 2: Derive requested metrics from atomics
-        derived_expressions = [METRIC_CONFIG[m]["expr"] for m in metrics]
-        result = result.with_columns(*derived_expressions)
+        # Step 2: Derive standard metrics (those without timeseries_agg)
+        derived_expressions = [
+            METRIC_REGISTRY[m].derive_expr
+            for m in metrics
+            if METRIC_REGISTRY[m].derive_expr is not None and METRIC_REGISTRY[m].timeseries_agg is None
+        ]
+        if derived_expressions:
+            result = result.with_columns(*derived_expressions)
 
         # Step 3: Select only period + requested metric columns
         metric_names = [m.value for m in metrics]
         result = result.select(["period"] + metric_names).sort("period").collect()
 
         # Build series with values dict
-        metric_names = [m.value for m in metrics]
         series = [
             SeriesPoint(
                 period=row["period"],
@@ -222,4 +210,60 @@ class AnalyticsService:
             start_date=start_date.strftime("%Y-%m-%d"),
             end_date=end_date.strftime("%Y-%m-%d"),
             series=series,
+        )
+
+    @async_cached(cache)
+    async def get_services_breakdown(
+        self,
+        start_date: datetime,
+        end_date: datetime,
+    ) -> ServiceBreakdownResponse:
+        """Get breakdown of services with counts and cancellation rates."""
+        lf = await self._load_lazy(start_date, end_date)
+
+        total_appointments = lf.select(pl.len()).collect()[0, 0]
+
+        # Explode services: one row per service per appointment
+        result = (
+            lf.explode("data.services")
+            .filter(pl.col("data.services").is_not_null())
+            .group_by("data.services")
+            .agg(
+                pl.len().alias("count"),
+                _is_customer_cancel.sum().alias("cancelled"),
+            )
+            .with_columns(
+                (pl.col("count").cast(pl.Float64) / max(total_appointments, 1) * 100)
+                .round(2)
+                .alias("percentage"),
+                (
+                    pl.when(pl.col("count") > 0)
+                    .then(pl.col("cancelled").cast(pl.Float64) / pl.col("count") * 100)
+                    .otherwise(0.0)
+                    .round(2)
+                    .alias("cancellation_rate")
+                ),
+            )
+            .sort("count", descending=True)
+            .collect()
+        )
+
+        services = [
+            ServiceBreakdownItem(
+                service=row["data.services"],
+                count=row["count"],
+                percentage=row["percentage"],
+                cancelled=row["cancelled"],
+                cancellation_rate=row["cancellation_rate"],
+            )
+            for row in result.to_dicts()
+        ]
+
+        return ServiceBreakdownResponse(
+            period=PeriodRange(
+                start=start_date.strftime("%Y-%m-%d"),
+                end=end_date.strftime("%Y-%m-%d"),
+            ),
+            total_appointments=total_appointments,
+            services=services,
         )

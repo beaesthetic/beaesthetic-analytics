@@ -5,7 +5,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from analytics.models import Granularity, Metric, SummaryResponse, TimeSeriesResponse
+from analytics.models import Granularity, Metric, ServiceBreakdownResponse, SummaryResponse, TimeSeriesResponse
 from analytics.services.analytics import AnalyticsService
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
@@ -27,6 +27,16 @@ async def get_timeseries(
 ) -> TimeSeriesResponse:
     """Get time series analytics with configurable granularity and metrics."""
     return await service.get_timeseries(granularity, tuple(metrics), start_date, end_date, timezone)
+
+
+@router.get("/services/breakdown", response_model=ServiceBreakdownResponse)
+async def get_services_breakdown(
+    start_date: Annotated[datetime, Query(description="Start date (inclusive)")],
+    end_date: Annotated[datetime, Query(description="End date (exclusive)")],
+    service: Annotated[AnalyticsService, Depends(get_analytics_service)],
+) -> ServiceBreakdownResponse:
+    """Get breakdown of services with counts and cancellation rates."""
+    return await service.get_services_breakdown(start_date, end_date)
 
 
 @router.get("/summary", response_model=SummaryResponse)
