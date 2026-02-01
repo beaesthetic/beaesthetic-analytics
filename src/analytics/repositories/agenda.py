@@ -6,6 +6,7 @@ from datetime import datetime
 from functools import partial
 
 import polars as pl
+import pyarrow as pa
 from pymongoarrow.api import find_arrow_all
 from pymongo import MongoClient
 
