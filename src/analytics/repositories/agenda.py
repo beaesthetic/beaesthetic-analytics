@@ -6,7 +6,6 @@ from datetime import datetime
 from functools import partial
 
 import polars as pl
-import pyarrow as pa
 from pymongoarrow.api import find_arrow_all
 from pymongo import MongoClient
 
@@ -14,17 +13,6 @@ from analytics.config import settings
 
 # Thread pool for sync MongoDB operations
 _executor = ThreadPoolExecutor(max_workers=4)
-
-# Arrow schema for appointments - explicit schema ensures nested fields are extracted
-APPOINTMENT_SCHEMA = pa.schema([
-    ("start", pa.timestamp("ms", tz="UTC")),
-    ("end", pa.timestamp("ms", tz="UTC")),
-    ("isCancelled", pa.bool_()),
-    ("cancelReason", pa.string()),
-    ("createdAt", pa.timestamp("ms", tz="UTC")),
-    ("data.type", pa.string()),
-    ("data.services", pa.list_(pa.string())),
-])
 
 
 class AgendaRepository:
@@ -50,7 +38,6 @@ class AgendaRepository:
         return find_arrow_all(
             self._collection,
             query,
-            schema=APPOINTMENT_SCHEMA,
         )
 
     async def find_as_polars(
